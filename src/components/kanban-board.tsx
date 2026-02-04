@@ -582,7 +582,7 @@ export default function KanbanBoard() {
     let targetIndex = 0;
 
     if (overId.startsWith("column:")) {
-      targetColumnId = overId.replace("column:", "");
+      targetColumnId = overId.replace("column:", "") as Id<"columns">;
       targetIndex = (cardsByColumn[targetColumnId] ?? []).length;
     } else {
       const overCard = cards.find((card) => card._id === overId);
@@ -828,7 +828,13 @@ export default function KanbanBoard() {
     }),
   };
 
-  const handleArchiveRequest = async (id: Id<"cards">, archived: boolean) => {
+  const handleArchiveRequest = async ({
+    id,
+    archived,
+  }: {
+    id: Id<"cards">;
+    archived: boolean;
+  }) => {
     if (!archived) {
       setArchiveTarget(id);
       return;
@@ -1182,7 +1188,9 @@ export default function KanbanBoard() {
               onEditCard={handleEditToggle}
               nowTick={nowTick}
               onArchive={handleArchiveRequest}
-              onRename={updateColumn}
+              onRename={async (args) => {
+                await updateColumn(args);
+              }}
               onToggleTimer={handleTimerToggle}
               focusColumnId={focusColumnId}
               onSound={playTacticalSound}
@@ -2180,12 +2188,10 @@ function DraftCard({
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useDraggable({ id: `draft:${draft.id}` });
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
   };
 
   return (
@@ -2382,12 +2388,10 @@ function OverflowCard({ card }: { card: CardRecord }) {
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useDraggable({ id: `${card.archived ? "archive" : "overflow"}:${card._id}` });
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
   };
 
   return (
