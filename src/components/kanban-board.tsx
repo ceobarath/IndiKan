@@ -201,16 +201,6 @@ export default function KanbanBoard() {
     return baseColumns.filter((column) => !hiddenColumnIds.has(column._id));
   }, [baseColumns, hiddenColumnIds]);
 
-  // Ensure quick add has a default column once columns are loaded.
-  useEffect(() => {
-    if (!quickForm.columnId && baseColumns.length > 0) {
-      setQuickForm((prev) => ({
-        ...prev,
-        columnId: baseColumns[0]._id,
-      }));
-    }
-  }, [baseColumns, quickForm.columnId]);
-
   const focusColumnId = useMemo(() => {
     return baseColumns[1]?._id ?? null;
   }, [baseColumns]);
@@ -258,6 +248,7 @@ export default function KanbanBoard() {
 
       if (event.key.toLowerCase() === "n") {
         event.preventDefault();
+        setQuickForm((prev) => ({ ...prev, columnId: "" }));
         setShowQuickModal(true);
         setTimeout(() => quickTitleRef.current?.focus(), 0);
         return;
@@ -759,7 +750,13 @@ export default function KanbanBoard() {
     return baseColumns[2]?._id ?? null;
   }, [baseColumns]);
 
-  const handleTimerToggle = async (id: Id<"cards">) => {
+  const handleTimerToggle = async ({ id }: { id: Id<"cards"> }) => {
+    const card = cards.find((item) => item._id === id);
+    if (card?.timerStartedAt) {
+      setTimerModalId(id);
+      setShowTimerModal(true);
+      return;
+    }
     await toggleTimer({ id });
     setTimerModalId(id);
     setShowTimerModal(true);
@@ -1249,6 +1246,131 @@ export default function KanbanBoard() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showTimerModal && timerModalCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                  Focus timer
+                </p>
+                <h3 className="mt-1 text-lg font-semibold text-[color:var(--text)]">
+                  {timerModalCard.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  void playTacticalSound("cancel");
+                  if (timerModalCard.timerStartedAt) {
+                    await toggleTimer({ id: timerModalCard._id });
+                  }
+                  setShowTimerModal(false);
+                }}
+                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-3 w-3"
+                  aria-hidden="true"
+                >
+                  <path d="M18 6 6 18" />
+                  <path d="M6 6 18 18" />
+                </svg>
+                Close
+              </button>
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3">
+              <div className="text-sm font-semibold text-[color:var(--text)]">
+                {timerModalCard.timerStartedAt ? "Timer running" : "Timer paused"}
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[color:var(--text)]">
+                {(() => {
+                  const liveSeconds =
+                    timerModalCard.timeSeconds +
+                    (timerModalCard.timerStartedAt
+                      ? Math.floor(
+                          (nowTick - timerModalCard.timerStartedAt) / 1000
+                        )
+                      : 0);
+                  const hours = Math.floor(liveSeconds / 3600);
+                  const minutes = Math.floor((liveSeconds % 3600) / 60);
+                  const seconds = liveSeconds % 60;
+                  return `${hours}h ${minutes
+                    .toString()
+                    .padStart(2, "0")}m ${seconds
+                    .toString()
+                    .padStart(2, "0")}s`;
+                })()}
+              </span>
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  void playTacticalSound("tap");
+                  void toggleTimer({ id: timerModalCard._id });
+                }}
+                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-3 w-3"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="8" />
+                  <path d="M12 8v4l3 2" />
+                </svg>
+                {timerModalCard.timerStartedAt ? "Pause" : "Start"}
+              </button>
+              {nextToFocusColumnId && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    void playTacticalSound("confirm");
+                    if (timerModalCard.timerStartedAt) {
+                      await toggleTimer({ id: timerModalCard._id });
+                    }
+                    await moveCardToColumn(
+                      timerModalCard._id,
+                      nextToFocusColumnId
+                    );
+                    setShowTimerModal(false);
+                  }}
+                  className="flex items-center gap-2 rounded-full bg-[color:var(--text)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-3 w-3"
+                    aria-hidden="true"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Finish
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
