@@ -27,6 +27,20 @@ import clsx from "clsx";
 import confetti from "canvas-confetti";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Check,
+  CheckSquare,
+  Clock,
+  Archive,
+  Eye,
+  Minus,
+  Pencil,
+  Search,
+  Square,
+  Tags,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -67,7 +81,13 @@ type ColumnRecord = {
 export default function KanbanBoard() {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
-  const [dueThisWeekOnly, setDueThisWeekOnly] = useState(false);
+  const [tagFilters, setTagFilters] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [dateFilter, setDateFilter] = useState({
+    from: "",
+    to: "",
+  });
 
   const columns = (useQuery(api.columns.getColumns) ?? []) as ColumnRecord[];
   const cards = ((useQuery(api.cards.getCards, {
@@ -85,6 +105,7 @@ export default function KanbanBoard() {
   const toggleTimer = useMutation(api.cards.toggleTimer);
   const setOverflow = useMutation(api.cards.setOverflow);
   const reorderCards = useMutation(api.cards.reorderCards);
+  const deleteCard = useMutation(api.cards.deleteCard);
 
   const [quickForm, setQuickForm] = useState({
     title: "",
@@ -109,6 +130,16 @@ export default function KanbanBoard() {
   const [showPanels, setShowPanels] = useState(true);
   const [showTimerModal, setShowTimerModal] = useState(false);
   const [timerModalId, setTimerModalId] = useState<Id<"cards"> | null>(null);
+  const [activeSelectionColumnId, setActiveSelectionColumnId] = useState<
+    Id<"columns"> | null
+  >(null);
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [deleteTarget, setDeleteTarget] = useState<{
+    ids: Id<"cards">[];
+    label: string;
+  } | null>(null);
   const [editDraft, setEditDraft] = useState({
     title: "",
     description: "",
@@ -174,6 +205,11 @@ export default function KanbanBoard() {
     },
     []
   );
+
+  const cardById = useMemo(() => {
+    return new Map(cards.map((card) => [card._id, card]));
+  }, [cards]);
+
 
   useEffect(() => {
     const interval = setInterval(() => setNowTick(Date.now()), 1000);
@@ -260,12 +296,13 @@ export default function KanbanBoard() {
         return;
       }
 
-      if (
-        focusedCardId &&
-        !search.trim() &&
-        !dueThisWeekOnly &&
-        ["1", "2", "3", "4"].includes(event.key)
-      ) {
+      const filtersActive =
+        Boolean(search.trim()) ||
+        tagFilters.size > 0 ||
+        Boolean(dateFilter.from) ||
+        Boolean(dateFilter.to);
+
+      if (focusedCardId && !filtersActive && ["1", "2", "3", "4"].includes(event.key)) {
         const index = Number(event.key) - 1;
         const targetColumn = sortedColumns[index];
         if (targetColumn) {
@@ -280,7 +317,9 @@ export default function KanbanBoard() {
     focusedCardId,
     sortedColumns,
     search,
-    dueThisWeekOnly,
+    tagFilters,
+    dateFilter.from,
+    dateFilter.to,
     editingCardId,
     cards,
     playTacticalSound,
@@ -290,16 +329,20 @@ export default function KanbanBoard() {
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
   );
 
+  const availableTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    cards.forEach((card) => {
+      (card.tags ?? []).forEach((tag) => {
+        if (tag.trim()) tagSet.add(tag);
+      });
+    });
+    return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+  }, [cards]);
+
   const filteredCards = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    const now = new Date();
-    const startOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate()
-    );
-    const endOfWeek = new Date(startOfToday);
-    endOfWeek.setDate(endOfWeek.getDate() + 7);
+    const fromDate = dateFilter.from ? new Date(dateFilter.from) : null;
+    const toDate = dateFilter.to ? new Date(dateFilter.to) : null;
 
     return cards.filter((card) => {
       if (card.archived) return false;
@@ -313,12 +356,23 @@ export default function KanbanBoard() {
 
       if (!matchesSearch) return false;
 
-      if (!dueThisWeekOnly) return true;
-      if (!card.dueDate) return false;
-      const due = new Date(card.dueDate);
-      return due >= startOfToday && due <= endOfWeek;
+      if (tagFilters.size > 0) {
+        const tagMatch = (card.tags ?? []).some((tag) =>
+          tagFilters.has(tag)
+        );
+        if (!tagMatch) return false;
+      }
+
+      if (fromDate || toDate) {
+        if (!card.dueDate) return false;
+        const due = new Date(card.dueDate);
+        if (fromDate && due < fromDate) return false;
+        if (toDate && due > toDate) return false;
+      }
+
+      return true;
     });
-  }, [cards, dueThisWeekOnly, search]);
+  }, [cards, dateFilter.from, dateFilter.to, search, tagFilters]);
 
   const cardsByColumn = useMemo(() => {
     const map: Record<string, CardRecord[]> = {};
@@ -788,6 +842,35 @@ export default function KanbanBoard() {
     setArchiveTarget(null);
   };
 
+  const openDeleteConfirm = (ids: Id<"cards">[], label: string) => {
+    setDeleteTarget({ ids, label });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const ids = deleteTarget.ids;
+    for (const id of ids) {
+      const card = cardById.get(id);
+      if (card?.timerStartedAt) {
+        await toggleTimer({ id });
+      }
+    }
+    await Promise.all(ids.map((id) => deleteCard({ id })));
+    setSelectedCardIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    if (editingCardId && ids.includes(editingCardId)) {
+      handleEditToggle(null);
+    }
+    if (timerModalId && ids.includes(timerModalId)) {
+      setShowTimerModal(false);
+      setTimerModalId(null);
+    }
+    setDeleteTarget(null);
+  };
+
 
   return (
     <section className="space-y-6">
@@ -798,24 +881,26 @@ export default function KanbanBoard() {
               Indikan
             </h1>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              void playTacticalSound("tap");
-              setQuickForm((prev) => ({ ...prev, columnId: "" }));
-              setShowQuickModal(true);
-              setTimeout(() => quickTitleRef.current?.focus(), 0);
-            }}
-            className="rounded-full bg-[color:var(--text)] px-5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white shadow-[var(--shadow)]"
-          >
-            Quick add
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                void playTacticalSound("tap");
+                setQuickForm((prev) => ({ ...prev, columnId: "" }));
+                setShowQuickModal(true);
+                setTimeout(() => quickTitleRef.current?.focus(), 0);
+              }}
+              className="rounded-full bg-[color:var(--accent)] px-5 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)] shadow-[var(--shadow)]"
+            >
+              Quick add
+            </button>
+          </div>
         </div>
       </div>
 
       {showLimitModal && limitNotice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+          <div className="w-full max-w-md rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
             <h3 className="text-lg font-semibold text-[color:var(--text)]">
               In Progress Limit
             </h3>
@@ -830,7 +915,7 @@ export default function KanbanBoard() {
                   setShowLimitModal(false);
                   setLimitNotice(null);
                 }}
-                className="rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                className="rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
               >
                 Got it
               </button>
@@ -839,66 +924,96 @@ export default function KanbanBoard() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 rounded-3xl border border-[color:var(--stroke)] bg-white/70 p-5 shadow-[var(--shadow)] lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-1 items-center gap-3 rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 shadow-sm">
-          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+      <div className="flex flex-col gap-3 rounded-3xl border border-[color:var(--stroke)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-1 items-center gap-3 rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 shadow-sm">
+          <span className="text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
             Search
           </span>
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-4 w-4 text-[color:var(--text-muted)]"
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.3-4.3" />
-          </svg>
+          <Search className="h-4 w-4 text-[color:var(--text-muted)]" aria-hidden="true" />
           <input
             ref={searchRef}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Filter by title or notes"
-            className="w-full border-0 bg-transparent text-sm outline-none"
+            className="w-full border-0 bg-transparent text-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-muted)]"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-          <label className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
+          <details className="relative">
+            <summary
+              onClick={() => void playTacticalSound("tap")}
+              className="cursor-pointer list-none rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
+              aria-label="Tag filters"
+            >
+              <Tags className="h-4 w-4" aria-hidden="true" />
+            </summary>
+            <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-3 text-xs font-semibold tracking-[0.06em] text-[color:var(--text-muted)] shadow-[var(--shadow)]">
+              <p className="mb-2 text-[10px]">Filter by tags</p>
+              {availableTags.length === 0 ? (
+                <p className="text-[10px] text-[color:var(--text-muted)]">
+                  No tags yet
+                </p>
+              ) : (
+                availableTags.map((tag) => (
+                  <label key={tag} className="flex items-center gap-2 py-1">
+                    <input
+                      type="checkbox"
+                      checked={tagFilters.has(tag)}
+                      onChange={(event) => {
+                        const next = new Set(tagFilters);
+                        if (event.target.checked) {
+                          next.add(tag);
+                        } else {
+                          next.delete(tag);
+                        }
+                        setTagFilters(next);
+                        void playTacticalSound("tap");
+                      }}
+                      className="h-4 w-4 rounded border border-[color:var(--stroke)] accent-[color:var(--accent)]"
+                    />
+                    {tag}
+                  </label>
+                ))
+              )}
+            </div>
+          </details>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
+              From
+            </span>
             <input
-              type="checkbox"
-              checked={dueThisWeekOnly}
+              type="date"
+              value={dateFilter.from}
               onChange={(event) => {
-                setDueThisWeekOnly(event.target.checked);
+                setDateFilter((prev) => ({ ...prev, from: event.target.value }));
                 void playTacticalSound("tap");
               }}
-              className="h-4 w-4 rounded border border-[color:var(--stroke)]"
+              className="rounded-full border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-1 text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
             />
-            Due this week
-          </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
+              To
+            </span>
+            <input
+              type="date"
+              value={dateFilter.to}
+              onChange={(event) => {
+                setDateFilter((prev) => ({ ...prev, to: event.target.value }));
+                void playTacticalSound("tap");
+              }}
+              className="rounded-full border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-1 text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
+            />
+          </div>
           <details className="relative">
             <summary
               onClick={() => void playTacticalSound("tap")}
               className="cursor-pointer list-none rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
               aria-label="Column visibility"
             >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-4 w-4"
-                aria-hidden="true"
-              >
-                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
+              <Eye className="h-4 w-4" aria-hidden="true" />
             </summary>
-            <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-[color:var(--stroke)] bg-white p-3 text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)] shadow-[var(--shadow)]">
+            <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-3 text-xs font-semibold tracking-[0.06em] text-[color:var(--text-muted)] shadow-[var(--shadow)]">
               <p className="mb-2 text-[10px]">Toggle columns</p>
               {baseColumns.map((column) => {
                 const isHidden = hiddenColumnIds.has(column._id);
@@ -917,7 +1032,7 @@ export default function KanbanBoard() {
                         setHiddenColumnIds(next);
                         void playTacticalSound("tap");
                       }}
-                      className="h-4 w-4 rounded border border-[color:var(--stroke)]"
+                      className="h-4 w-4 rounded border border-[color:var(--stroke)] accent-[color:var(--accent)]"
                     />
                     {column.title}
                   </label>
@@ -1010,6 +1125,59 @@ export default function KanbanBoard() {
               cards={cardsByColumn[column._id] ?? []}
               focusedCardId={focusedCardId}
               editingCardId={editingCardId}
+              activeSelectionColumnId={activeSelectionColumnId}
+              selectedCardIds={selectedCardIds}
+              onStartSelection={(columnId) => {
+                void playTacticalSound("tap");
+                setActiveSelectionColumnId(columnId);
+                setSelectedCardIds(new Set());
+              }}
+              onClearSelection={(columnId) => {
+                void playTacticalSound("cancel");
+                setActiveSelectionColumnId((prev) =>
+                  prev === columnId ? null : prev
+                );
+                setSelectedCardIds((prev) => {
+                  const next = new Set(prev);
+                  (cardsByColumn[columnId] ?? []).forEach((card) =>
+                    next.delete(card._id)
+                  );
+                  return next;
+                });
+              }}
+              onSelectAllInColumn={(columnId, mode) => {
+                void playTacticalSound("tap");
+                setSelectedCardIds((prev) => {
+                  const next = new Set(prev);
+                  const columnCards = cardsByColumn[columnId] ?? [];
+                  if (mode === "clear") {
+                    columnCards.forEach((card) => next.delete(card._id));
+                  } else {
+                    columnCards.forEach((card) => next.add(card._id));
+                  }
+                  return next;
+                });
+              }}
+              onToggleCardSelection={(cardId) => {
+                void playTacticalSound("tap");
+                setSelectedCardIds((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(cardId)) {
+                    next.delete(cardId);
+                  } else {
+                    next.add(cardId);
+                  }
+                  return next;
+                });
+              }}
+              onDeleteSelected={(columnId, ids) => {
+                openDeleteConfirm(
+                  ids,
+                  `Delete ${ids.length} task${
+                    ids.length === 1 ? "" : "s"
+                  } from ${column.title}?`
+                );
+              }}
               onFocusCard={setFocusedCardId}
               onEditCard={handleEditToggle}
               nowTick={nowTick}
@@ -1047,21 +1215,21 @@ export default function KanbanBoard() {
       </DndContext>
 
       {filteredCards.length === 0 && (
-        <div className="rounded-3xl border border-dashed border-[color:var(--stroke)] bg-white/80 p-8 text-center shadow-[var(--shadow)]">
+        <div className="rounded-3xl border border-dashed border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-8 text-center shadow-[var(--shadow)]">
           <h3 className="text-lg font-semibold text-[color:var(--text)]">
-            {search || dueThisWeekOnly
+            {search || tagFilters.size > 0 || dateFilter.from || dateFilter.to
               ? "No matching tasks"
               : "Add your first task"}
           </h3>
           <p className="mt-2 text-sm text-[color:var(--text-muted)]">
-            {search || dueThisWeekOnly
+            {search || tagFilters.size > 0 || dateFilter.from || dateFilter.to
               ? "Try clearing filters to see everything again."
               : "Capture a quick idea, then keep moving."}
           </p>
           <button
             type="button"
             onClick={() => quickTitleRef.current?.focus()}
-            className="mt-4 rounded-full bg-[color:var(--text)] px-5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white"
+            className="mt-4 rounded-full bg-[color:var(--accent)] px-5 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
           >
             Add a task
           </button>
@@ -1070,7 +1238,7 @@ export default function KanbanBoard() {
 
       {editingCard && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+          <div className="w-full max-w-2xl rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-[color:var(--text)]">
@@ -1089,7 +1257,7 @@ export default function KanbanBoard() {
                 }}
                 disabled={Boolean(editingCard.timerStartedAt)}
                 className={clsx(
-                  "rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]",
+                  "rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]",
                   editingCard.timerStartedAt && "opacity-50"
                 )}
               >
@@ -1119,7 +1287,7 @@ export default function KanbanBoard() {
               className="mt-6 space-y-4"
             >
               <div className="space-y-2">
-                <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                <label className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                   Title
                 </label>
                 <input
@@ -1127,11 +1295,11 @@ export default function KanbanBoard() {
                   onChange={(event) =>
                     setEditDraft((prev) => ({ ...prev, title: event.target.value }))
                   }
-                  className="w-full rounded-xl border border-[color:var(--stroke)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="w-full rounded-xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[color:var(--text)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                <label className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                   Notes
                 </label>
                 <textarea
@@ -1143,11 +1311,11 @@ export default function KanbanBoard() {
                     }))
                   }
                   rows={3}
-                  className="w-full resize-none rounded-xl border border-[color:var(--stroke)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="w-full resize-none rounded-xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[color:var(--text)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                <label className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                   Tags (comma separated)
                 </label>
                 <input
@@ -1159,12 +1327,12 @@ export default function KanbanBoard() {
                     }))
                   }
                   placeholder="design, growth, release"
-                  className="w-full rounded-xl border border-[color:var(--stroke)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="w-full rounded-xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[color:var(--text)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 />
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                  <label className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                     Priority
                   </label>
                   <select
@@ -1175,7 +1343,7 @@ export default function KanbanBoard() {
                         priority: event.target.value as Priority,
                       }))
                     }
-                    className="w-full rounded-xl border border-[color:var(--stroke)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    className="w-full rounded-xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[color:var(--text)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                   >
                     {priorities.map((priority) => (
                       <option key={priority.value} value={priority.value}>
@@ -1185,7 +1353,7 @@ export default function KanbanBoard() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                  <label className="text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                     Due date
                   </label>
                   <input
@@ -1197,28 +1365,45 @@ export default function KanbanBoard() {
                         dueDate: event.target.value,
                       }))
                     }
-                    className="w-full rounded-xl border border-[color:var(--stroke)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    className="w-full rounded-xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-3 py-2 text-sm text-[color:var(--text)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                   />
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    void playTacticalSound("tap");
-                    if (editingCard.timerStartedAt) {
-                      await toggleTimer({ id: editingCard._id });
-                    }
-                    await toggleArchive({
-                      id: editingCard._id,
-                      archived: !editingCard.archived,
-                    });
-                    handleEditToggle(null);
-                  }}
-                  className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-600"
-                >
-                  {editingCard.archived ? "Unarchive" : "Archive"}
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      void playTacticalSound("tap");
+                      if (editingCard.timerStartedAt) {
+                        await toggleTimer({ id: editingCard._id });
+                      }
+                      await toggleArchive({
+                        id: editingCard._id,
+                        archived: !editingCard.archived,
+                      });
+                      handleEditToggle(null);
+                    }}
+                    className="flex items-center gap-2 text-xs font-semibold tracking-[0.08em] text-amber-600"
+                  >
+                    <Archive className="h-3 w-3" aria-hidden="true" />
+                    {editingCard.archived ? "Unarchive" : "Archive"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void playTacticalSound("cancel");
+                      openDeleteConfirm(
+                        [editingCard._id],
+                        `Delete "${editingCard.title}"?`
+                      );
+                    }}
+                    className="flex items-center gap-2 text-xs font-semibold tracking-[0.08em] text-rose-600"
+                  >
+                    <Trash2 className="h-3 w-3" aria-hidden="true" />
+                    Delete
+                  </button>
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {celebrateColumnId &&
                     celebrateColumnId !== editingCard.columnId &&
@@ -1232,14 +1417,14 @@ export default function KanbanBoard() {
                           celebrateColumnId
                         ).then(() => handleEditToggle(null));
                       }}
-                      className="rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                      className="rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
                     >
                       Mark done
                     </button>
                   )}
                   <button
                     type="submit"
-                    className="rounded-full bg-[color:var(--text)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white"
+                    className="rounded-full bg-[color:var(--accent)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
                   >
                     Save
                   </button>
@@ -1252,10 +1437,10 @@ export default function KanbanBoard() {
 
       {showTimerModal && timerModalCard && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+          <div className="w-full max-w-lg rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                <p className="text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
                   Focus timer
                 </p>
                 <h3 className="mt-1 text-lg font-semibold text-[color:var(--text)]">
@@ -1271,21 +1456,9 @@ export default function KanbanBoard() {
                   }
                   setShowTimerModal(false);
                 }}
-                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="M6 6 18 18" />
-                </svg>
+                <X className="h-3 w-3" aria-hidden="true" />
                 Close
               </button>
             </div>
@@ -1294,7 +1467,7 @@ export default function KanbanBoard() {
               <div className="text-sm font-semibold text-[color:var(--text)]">
                 {timerModalCard.timerStartedAt ? "Timer running" : "Timer paused"}
               </div>
-              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[color:var(--text)]">
+              <span className="rounded-full bg-[color:var(--surface-strong)] px-3 py-1 text-xs font-semibold text-[color:var(--text)]">
                 {(() => {
                   const liveSeconds =
                     timerModalCard.timeSeconds +
@@ -1322,21 +1495,9 @@ export default function KanbanBoard() {
                   void playTacticalSound("tap");
                   void toggleTimer({ id: timerModalCard._id });
                 }}
-                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                className="flex items-center gap-2 rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="12" r="8" />
-                  <path d="M12 8v4l3 2" />
-                </svg>
+                <Clock className="h-3 w-3" aria-hidden="true" />
                 {timerModalCard.timerStartedAt ? "Pause" : "Start"}
               </button>
               {nextToFocusColumnId && (
@@ -1353,20 +1514,9 @@ export default function KanbanBoard() {
                     );
                     setShowTimerModal(false);
                   }}
-                  className="flex items-center gap-2 rounded-full bg-[color:var(--text)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white"
+                  className="flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-3 w-3"
-                    aria-hidden="true"
-                  >
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
+                  <Check className="h-3 w-3" aria-hidden="true" />
                   Finish
                 </button>
               )}
@@ -1377,7 +1527,7 @@ export default function KanbanBoard() {
 
       {archiveTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+          <div className="w-full max-w-md rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
             <h3 className="text-lg font-semibold text-[color:var(--text)]">
               Archive this task?
             </h3>
@@ -1391,7 +1541,7 @@ export default function KanbanBoard() {
                   void playTacticalSound("cancel");
                   setArchiveTarget(null);
                 }}
-                className="rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                className="rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
               >
                 Cancel
               </button>
@@ -1401,7 +1551,7 @@ export default function KanbanBoard() {
                   void playTacticalSound("confirm");
                   void confirmArchive();
                 }}
-                className="rounded-full bg-[color:var(--text)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white"
+                className="rounded-full bg-[color:var(--accent)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
               >
                 Archive
               </button>
@@ -1410,9 +1560,44 @@ export default function KanbanBoard() {
         </div>
       )}
 
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
+            <h3 className="text-lg font-semibold text-[color:var(--text)]">
+              Delete task{deleteTarget.ids.length === 1 ? "" : "s"}?
+            </h3>
+            <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+              {deleteTarget.label} This can't be undone.
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  void playTacticalSound("cancel");
+                  setDeleteTarget(null);
+                }}
+                className="rounded-full border border-[color:var(--stroke)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void playTacticalSound("confirm");
+                  void confirmDelete();
+                }}
+                className="rounded-full bg-[color:var(--accent)] px-4 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showQuickModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-[var(--shadow)]">
+          <div className="w-full max-w-2xl rounded-3xl bg-[color:var(--surface)] p-6 shadow-[var(--shadow)]">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-[color:var(--text)]">
@@ -1428,7 +1613,7 @@ export default function KanbanBoard() {
                   void playTacticalSound("cancel");
                   setShowQuickModal(false);
                 }}
-                className="rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
+                className="rounded-full border border-[color:var(--stroke)] px-3 py-1 text-xs font-semibold tracking-[0.08em] text-[color:var(--text-muted)]"
               >
                 Close
               </button>
@@ -1451,7 +1636,7 @@ export default function KanbanBoard() {
                     }))
                   }
                   placeholder="Ship onboarding flow"
-                  className="rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] placeholder:text-[color:var(--text-muted)]"
                 />
                 <select
                   value={quickForm.priority}
@@ -1461,7 +1646,7 @@ export default function KanbanBoard() {
                       priority: event.target.value as Priority,
                     }))
                   }
-                  className="rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 >
                   {priorities.map((priority) => (
                     <option key={priority.value} value={priority.value}>
@@ -1478,7 +1663,7 @@ export default function KanbanBoard() {
                       dueDate: event.target.value,
                     }))
                   }
-                  className="rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] placeholder:text-[color:var(--text-muted)]"
                 />
                 <select
                   value={quickForm.columnId}
@@ -1488,7 +1673,7 @@ export default function KanbanBoard() {
                       columnId: event.target.value,
                     }))
                   }
-                  className="rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                  className="rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 >
                   <option value="">Draft (no status)</option>
                   {baseColumns.map((column) => (
@@ -1499,7 +1684,7 @@ export default function KanbanBoard() {
                 </select>
                 <button
                   type="submit"
-                  className="justify-self-start rounded-2xl bg-[color:var(--accent)] px-5 py-3 text-sm font-semibold text-[color:var(--text)] shadow-sm lg:justify-self-auto"
+                  className="justify-self-start rounded-2xl bg-[color:var(--accent)] px-5 py-3 text-sm font-semibold text-[color:var(--bg)] shadow-sm lg:justify-self-auto"
                 >
                   Add
                 </button>
@@ -1514,7 +1699,7 @@ export default function KanbanBoard() {
                 }
                 rows={3}
                 placeholder="Notes (optional)"
-                className="w-full resize-none rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                className="w-full resize-none rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] placeholder:text-[color:var(--text-muted)]"
               />
               <input
                 value={quickForm.tags}
@@ -1525,7 +1710,7 @@ export default function KanbanBoard() {
                   }))
                 }
                 placeholder="Tags (comma separated)"
-                className="w-full rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                className="w-full rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)] placeholder:text-[color:var(--text-muted)]"
               />
             </form>
           </div>
@@ -1541,6 +1726,13 @@ function KanbanColumn({
   cards,
   focusedCardId,
   editingCardId,
+  activeSelectionColumnId,
+  selectedCardIds,
+  onStartSelection,
+  onClearSelection,
+  onSelectAllInColumn,
+  onToggleCardSelection,
+  onDeleteSelected,
   onFocusCard,
   onEditCard,
   nowTick,
@@ -1554,6 +1746,16 @@ function KanbanColumn({
   cards: CardRecord[];
   focusedCardId: Id<"cards"> | null;
   editingCardId: Id<"cards"> | null;
+  activeSelectionColumnId: Id<"columns"> | null;
+  selectedCardIds: Set<string>;
+  onStartSelection: (columnId: Id<"columns">) => void;
+  onClearSelection: (columnId: Id<"columns">) => void;
+  onSelectAllInColumn: (
+    columnId: Id<"columns">,
+    mode: "select" | "clear"
+  ) => void;
+  onToggleCardSelection: (cardId: Id<"cards">) => void;
+  onDeleteSelected: (columnId: Id<"columns">, ids: Id<"cards">[]) => void;
   onFocusCard: (id: Id<"cards"> | null) => void;
   onEditCard: (id: Id<"cards"> | null) => void;
   nowTick: number;
@@ -1569,6 +1771,14 @@ function KanbanColumn({
   const { over } = useDndContext();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(column.title);
+  const selectionActive = activeSelectionColumnId === column._id;
+  const selectedCount = useMemo(() => {
+    return cards.reduce(
+      (count, card) => (selectedCardIds.has(card._id) ? count + 1 : count),
+      0
+    );
+  }, [cards, selectedCardIds]);
+  const allSelected = selectedCount > 0 && selectedCount === cards.length;
 
   const isHoveringCardInColumn = useMemo(() => {
     if (!over?.id) return false;
@@ -1587,7 +1797,7 @@ function KanbanColumn({
     <section
       ref={setNodeRef}
       className={clsx(
-        "flex min-h-[320px] flex-col gap-4 rounded-3xl border border-[color:var(--stroke)] bg-white/75 p-4 shadow-[var(--shadow)]",
+        "flex min-h-[320px] flex-col gap-4 rounded-3xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-4 shadow-[var(--shadow)]",
         (isOver || isHoveringCardInColumn) && "ring-2 ring-[color:var(--accent)]"
       )}
     >
@@ -1617,18 +1827,7 @@ function KanbanColumn({
                 className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
                 aria-label="Confirm rename"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
+                <Check className="h-3 w-3" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -1640,19 +1839,7 @@ function KanbanColumn({
                 className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
                 aria-label="Cancel rename"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
+                <X className="h-3 w-3" aria-hidden="true" />
               </button>
             </form>
           ) : (
@@ -1670,19 +1857,7 @@ function KanbanColumn({
                   className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
                   aria-label="Rename column"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-3 w-3"
-                    aria-hidden="true"
-                  >
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                  </svg>
+                  <Pencil className="h-3 w-3" aria-hidden="true" />
                 </button>
               </div>
               <p className="text-xs text-[color:var(--text-muted)]">
@@ -1691,7 +1866,69 @@ function KanbanColumn({
             </>
           )}
         </div>
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          {selectionActive ? (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  onSelectAllInColumn(
+                    column._id,
+                    allSelected ? "clear" : "select"
+                  )
+                }
+                className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
+                aria-label={allSelected ? "Clear all" : "Select all"}
+                title={allSelected ? "Clear all" : "Select all"}
+              >
+                {allSelected ? (
+                  <X className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <CheckSquare className="h-3 w-3" aria-hidden="true" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onDeleteSelected(
+                    column._id,
+                    cards
+                      .filter((card) => selectedCardIds.has(card._id))
+                      .map((card) => card._id)
+                  )
+                }
+                disabled={selectedCount === 0}
+                className={clsx(
+                  "rounded-full border border-[color:var(--stroke)] p-2 text-rose-600",
+                  selectedCount === 0 && "opacity-50"
+                )}
+                aria-label="Delete selected"
+                title="Delete selected"
+              >
+                <Trash2 className="h-3 w-3" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onClearSelection(column._id)}
+                className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
+                aria-label="Done"
+                title="Done"
+              >
+                <Check className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onStartSelection(column._id)}
+              className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
+              aria-label="Select"
+              title="Select"
+            >
+              <Square className="h-3 w-3" aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </header>
 
       <SortableContext
@@ -1705,6 +1942,9 @@ function KanbanColumn({
               card={card}
               isFocused={focusedCardId === card._id}
               isEditing={editingCardId === card._id}
+              selectionEnabled={selectionActive}
+              isSelected={selectedCardIds.has(card._id)}
+              onSelect={onToggleCardSelection}
               onFocus={onFocusCard}
               onEdit={onEditCard}
               nowTick={nowTick}
@@ -1724,6 +1964,9 @@ function KanbanCard({
   card,
   isFocused,
   isEditing,
+  selectionEnabled,
+  isSelected,
+  onSelect,
   onFocus,
   onEdit,
   nowTick,
@@ -1735,6 +1978,9 @@ function KanbanCard({
   card: CardRecord;
   isFocused: boolean;
   isEditing: boolean;
+  selectionEnabled: boolean;
+  isSelected: boolean;
+  onSelect: (id: Id<"cards">) => void;
   onFocus: (id: Id<"cards">) => void;
   onEdit: (id: Id<"cards"> | null) => void;
   nowTick: number;
@@ -1752,7 +1998,7 @@ function KanbanCard({
     isDragging,
   } = useSortable({
     id: card._id,
-    disabled: card.archived || isEditing,
+    disabled: card.archived || isEditing || selectionEnabled,
     animateLayoutChanges: (args) =>
       defaultAnimateLayoutChanges({ ...args, wasDragging: true }),
   });
@@ -1762,9 +2008,9 @@ function KanbanCard({
   };
 
   const priorityStyles = {
-    low: "bg-emerald-100 text-emerald-700",
-    medium: "bg-amber-100 text-amber-800",
-    high: "bg-rose-100 text-rose-700",
+    low: "bg-emerald-500/20 text-emerald-200",
+    medium: "bg-amber-400/20 text-amber-200",
+    high: "bg-rose-400/20 text-rose-200",
   };
 
   const liveSeconds =
@@ -1789,25 +2035,53 @@ function KanbanCard({
       {...attributes}
       {...listeners}
       className={clsx(
-        "rounded-2xl border border-[color:var(--stroke)] bg-white p-4 shadow-sm transition will-change-transform",
-        !card.archived && !isEditing && "cursor-grab active:cursor-grabbing",
+        "rounded-2xl border border-[color:var(--stroke)] bg-gradient-to-br from-[color:var(--surface-strong)] to-[color:var(--surface)] p-4 shadow-sm transition will-change-transform",
+        !card.archived &&
+          !isEditing &&
+          !selectionEnabled &&
+          "cursor-grab active:cursor-grabbing",
         isDragging && "opacity-80 shadow-lg ring-2 ring-[color:var(--accent)]",
         isFocused && "ring-2 ring-[color:var(--accent)]"
       )}
       onClick={() => {
+        if (selectionEnabled) {
+          onSelect(card._id);
+          return;
+        }
         onFocus(card._id);
         onEdit(card._id);
       }}
       layout={!isDragging}
       transition={{ type: "spring", stiffness: 260, damping: 30 }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex items-start gap-3">
+        {selectionEnabled && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(card._id);
+            }}
+            className={clsx(
+              "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border text-[color:var(--text-muted)]",
+              isSelected
+                ? "border-[color:var(--accent)] bg-[color:var(--surface-strong)]"
+                : "border-[color:var(--stroke)]"
+            )}
+            aria-label={isSelected ? "Deselect card" : "Select card"}
+            title={isSelected ? "Deselect card" : "Select card"}
+          >
+            {isSelected && (
+              <Check className="h-3 w-3" aria-hidden="true" />
+            )}
+          </button>
+        )}
+        <div className="flex-1">
           <h3 className="text-base font-semibold text-[color:var(--text)]">
             {card.title}
           </h3>
           {card.archived && (
-            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+            <p className="mt-1 text-[10px] font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
               Archived
             </p>
           )}
@@ -1819,7 +2093,7 @@ function KanbanCard({
               {card.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-full bg-[color:var(--surface-strong)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+                  className="rounded-full border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] px-2 py-1 text-[10px] font-semibold tracking-[0.06em] text-[color:var(--text)]"
                 >
                   {tag}
                 </span>
@@ -1830,7 +2104,7 @@ function KanbanCard({
         <div className="flex flex-col items-end gap-2">
           <span
             className={clsx(
-              "rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+              "rounded-full px-2 py-1 text-[10px] font-semibold tracking-[0.06em]",
               priorityStyles[card.priority]
             )}
           >
@@ -1842,7 +2116,7 @@ function KanbanCard({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--text-muted)]">
         <span>{card.dueDate ? `Due ${card.dueDate}` : "No due date"}</span>
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-[color:var(--surface-strong)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+          <span className="rounded-full bg-[color:var(--surface-strong)] px-2 py-1 text-[10px] font-semibold tracking-[0.06em] text-[color:var(--text-muted)]">
             {formattedTime}
           </span>
           {canStartTimer && (
@@ -1854,65 +2128,13 @@ function KanbanCard({
                 onToggleTimer({ id: card._id });
               }}
               onPointerDown={(event) => event.stopPropagation()}
-              className="flex items-center gap-1 rounded-full border border-[color:var(--stroke)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+              className="flex items-center gap-1 rounded-full border border-transparent bg-[color:var(--accent)] px-2 py-1 text-[10px] font-semibold tracking-[0.06em] text-[color:var(--bg)]"
               title={card.timerStartedAt ? "Stop timer" : "Start timer"}
             >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-3 w-3"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="8" />
-                <path d="M12 8v4l3 2" />
-              </svg>
+              <Clock className="h-3 w-3" aria-hidden="true" />
               {card.timerStartedAt ? "Stop" : "Start"}
             </button>
           )}
-            <button
-              type="button"
-              onClick={() => {
-                void onSound("tap");
-                onEdit(isEditing ? null : card._id);
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              className="rounded-full border border-[color:var(--stroke)] p-2 text-[color:var(--text-muted)]"
-              aria-label={isEditing ? "Close edit" : "Edit card"}
-            >
-              {isEditing ? (
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              ) : (
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-3 w-3"
-                  aria-hidden="true"
-                >
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                </svg>
-              )}
-            </button>
         </div>
       </div>
 
@@ -1923,7 +2145,7 @@ function KanbanCard({
 function CardPreview({ card }: { card: CardRecord | null }) {
   if (!card) return null;
   return (
-    <div className="w-[260px] rounded-2xl border border-[color:var(--stroke)] bg-white p-4 shadow-[var(--shadow)]">
+    <div className="w-[280px] rounded-2xl border border-[color:var(--stroke)] bg-gradient-to-br from-[color:var(--surface-strong)] to-[color:var(--surface)] p-4 shadow-[var(--shadow)]">
       <p className="text-sm font-semibold text-[color:var(--text)]">
         {card.title}
       </p>
@@ -1953,8 +2175,14 @@ function DraftCard({
   onChangeColumn: (columnId: string) => void;
   onSend: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition } =
-    useDraggable({ id: `draft:${draft.id}` });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useDraggable({ id: `draft:${draft.id}` });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -1966,7 +2194,10 @@ function DraftCard({
       style={{ ...style, transformOrigin: "center" }}
       {...attributes}
       {...listeners}
-      className="flex h-full flex-col gap-3 rounded-2xl border border-[color:var(--stroke)] bg-white p-4 shadow-sm transition will-change-transform"
+      className={clsx(
+        "flex max-w-[280px] flex-col gap-3 justify-self-start rounded-2xl border border-[color:var(--stroke)] bg-gradient-to-br from-[color:var(--surface-strong)] to-[color:var(--surface)] p-4 shadow-sm transition will-change-transform",
+        isDragging && "opacity-100"
+      )}
     >
       <div className="space-y-1">
         <p className="text-sm font-semibold text-[color:var(--text)]">
@@ -1978,7 +2209,7 @@ function DraftCard({
             "Pick a column"}
         </p>
       </div>
-      <div className="mt-auto text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+      <div className="mt-auto text-[10px] font-semibold tracking-[0.06em] text-[color:var(--text-muted)]">
         Drag to a column
       </div>
     </div>
@@ -1995,12 +2226,12 @@ function DraftPreview({
 }) {
   if (!draft) return null;
   return (
-    <div className="w-[260px] rounded-2xl border border-[color:var(--stroke)] bg-white p-4 shadow-[var(--shadow)]">
+    <div className="w-[280px] rounded-2xl border border-[color:var(--stroke)] bg-gradient-to-br from-[color:var(--surface-strong)] to-[color:var(--surface)] p-4 shadow-[var(--shadow)]">
       <p className="text-sm font-semibold text-[color:var(--text)]">
         {draft.title}
       </p>
       <p className="mt-1 text-xs text-[color:var(--text-muted)]">
-        {draft.description || "Draft"}
+        {draft.description || "Add a quick note to clarify the task."}
       </p>
     </div>
   );
@@ -2057,13 +2288,13 @@ function OverflowPanel({
     <div
       ref={setNodeRef}
       className={clsx(
-        "rounded-3xl border border-dashed border-[color:var(--stroke)] bg-white/80 p-5 shadow-[var(--shadow)]",
+        "rounded-3xl border border-dashed border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-5 shadow-[var(--shadow)]",
         isOver && "ring-2 ring-[color:var(--accent)]"
       )}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+          <h3 className="text-sm font-semibold tracking-[0.08em] text-[color:var(--text-muted)]">
             {title}
           </h3>
           {isOpen && (
@@ -2079,38 +2310,15 @@ function OverflowPanel({
           aria-label={isOpen ? "Minimize panel" : "Maximize panel"}
         >
           {isOpen ? (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-4 w-4"
-              aria-hidden="true"
-            >
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
+            <X className="h-4 w-4" aria-hidden="true" />
           ) : (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-4 w-4"
-              aria-hidden="true"
-            >
-              <path d="M8 12h8" />
-            </svg>
+            <Minus className="h-4 w-4" aria-hidden="true" />
           )}
         </button>
       </div>
       {isOpen && (
         <>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-4 grid auto-rows-min items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {drafts.map((draft) => (
               <DraftCard
                 key={draft.id}
@@ -2124,7 +2332,7 @@ function OverflowPanel({
               <OverflowCard key={card._id} card={card} />
             ))}
             {drafts.length === 0 && cards.length === 0 && (
-              <div className="flex min-h-[140px] items-center justify-center text-center rounded-2xl border border-dashed border-[color:var(--stroke)] bg-white/60 text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+              <div className="flex min-h-[140px] items-center justify-center text-center rounded-2xl border border-dashed border-[color:var(--stroke)] bg-[color:var(--surface-strong)] text-xs font-semibold tracking-[0.06em] text-[color:var(--text-muted)]">
                 {emptyLabel}
               </div>
             )}
@@ -2169,8 +2377,14 @@ function ArchivePanel({
 }
 
 function OverflowCard({ card }: { card: CardRecord }) {
-  const { attributes, listeners, setNodeRef, transform, transition } =
-    useDraggable({ id: `${card.archived ? "archive" : "overflow"}:${card._id}` });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useDraggable({ id: `${card.archived ? "archive" : "overflow"}:${card._id}` });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -2182,7 +2396,10 @@ function OverflowCard({ card }: { card: CardRecord }) {
       style={style}
       {...attributes}
       {...listeners}
-      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[color:var(--stroke)] bg-white px-4 py-3 shadow-sm"
+      className={clsx(
+        "flex max-w-[280px] flex-wrap items-center justify-between gap-3 justify-self-start rounded-2xl border border-[color:var(--stroke)] bg-gradient-to-br from-[color:var(--surface-strong)] to-[color:var(--surface)] px-4 py-3 shadow-sm transition will-change-transform",
+        isDragging && "opacity-100"
+      )}
     >
       <div>
         <p className="text-sm font-semibold text-[color:var(--text)]">
@@ -2192,7 +2409,7 @@ function OverflowCard({ card }: { card: CardRecord }) {
           {card.archived ? "Archived card" : "Draft card"}
         </p>
       </div>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+      <div className="text-[10px] font-semibold tracking-[0.06em] text-[color:var(--text-muted)]">
         Drag to a column
       </div>
     </div>

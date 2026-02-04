@@ -1,17 +1,18 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #f7f1e8;
-  --bg-secondary: #e7f3f6;
-  --surface: #ffffff;
-  --surface-strong: #f1e7d8;
-  --text: #1a1711;
-  --text-muted: #5e5a52;
-  --accent: #ff9f4a;
-  --accent-strong: #e16f22;
-  --stroke: rgba(26, 23, 17, 0.12);
-  --shadow: 0 18px 45px rgba(26, 23, 17, 0.15);
+  --bg: #0f1116;
+  --bg-secondary: #161a24;
+  --surface: #171b24;
+  --surface-strong: #1f2431;
+  --text: #f4f6fb;
+  --text-muted: #9aa3b2;
+  --accent: #f7f06c;
+  --accent-strong: #f1c34a;
+  --stroke: rgba(255, 255, 255, 0.08);
+  --shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
 }
+
 
 * {
   box-sizing: border-box;
@@ -23,16 +24,21 @@ body {
   color: var(--text);
   font-family: var(--font-body), "Karla", sans-serif;
   background: radial-gradient(
-      circle at top left,
-      rgba(255, 159, 74, 0.18),
+      circle at 15% 15%,
+      rgba(128, 84, 255, 0.22),
       transparent 45%
     ),
     radial-gradient(
-      circle at 20% 35%,
-      rgba(93, 185, 205, 0.22),
-      transparent 50%
+      circle at 80% 10%,
+      rgba(255, 232, 110, 0.18),
+      transparent 40%
     ),
-    linear-gradient(125deg, var(--bg), var(--bg-secondary));
+    radial-gradient(
+      circle at 85% 80%,
+      rgba(78, 220, 255, 0.18),
+      transparent 45%
+    ),
+    linear-gradient(135deg, var(--bg), var(--bg-secondary));
 }
 
 h1,

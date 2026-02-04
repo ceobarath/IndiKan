@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { Karla, Sora } from "next/font/google";
+import { Outfit, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import ConvexClientProvider from "./ConvexClientProvider";
 
-const sora = Sora({
+const outfit = Outfit({
   variable: "--font-heading",
   subsets: ["latin"],
 });
 
-const karla = Karla({
+const plusJakarta = Plus_Jakarta_Sans({
   variable: "--font-body",
   subsets: ["latin"],
 });
@@ -25,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${sora.variable} ${karla.variable} antialiased`}>
+      <body className={`${outfit.variable} ${plusJakarta.variable} antialiased`}>
         <ConvexClientProvider>{children}</ConvexClientProvider>
       </body>
     </html>
