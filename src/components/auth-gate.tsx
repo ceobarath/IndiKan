@@ -8,8 +8,29 @@ const allowedEmail =
   process.env.NEXT_PUBLIC_AUTH_ALLOWED_EMAIL?.toLowerCase() ??
   "ceobarathpvt@gmail.com";
 
+const hasConvexUrl = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+
 export default function AuthGate({ children }: { children: React.ReactNode }) {
-  const { isLoading } = useConvexAuth();
+  // During static prerender (including the `/_not-found` route) the code runs
+  // on the server where Convex's React auth context is not available.
+  // We must avoid calling any Convex hooks or rendering Convex auth components
+  // on the server, and only use them in the browser.
+  const isBrowser = typeof window !== "undefined";
+
+  if (!isBrowser || !hasConvexUrl) {
+    return (
+      <div className="flex min-h-[70vh] w-full items-center justify-center rounded-3xl border border-[color:var(--stroke)] bg-[color:var(--surface)] p-10 shadow-[var(--shadow)]">
+        <p className="text-sm text-[color:var(--text-muted)]">Loading…</p>
+      </div>
+    );
+  }
+
+  return <AuthGateInner>{children}</AuthGateInner>;
+}
+
+function AuthGateInner({ children }: { children: React.ReactNode }) {
+  const auth = useConvexAuth();
+  const isLoading = auth?.isLoading ?? false;
 
   if (isLoading) {
     return (
