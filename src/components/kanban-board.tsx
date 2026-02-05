@@ -98,6 +98,7 @@ export default function KanbanBoard() {
   }));
 
   const ensureDefaults = useMutation(api.columns.ensureDefaults);
+  const claimExistingData = useMutation(api.columns.claimExistingData);
   const updateColumn = useMutation(api.columns.updateColumn);
   const createCard = useMutation(api.cards.createCard);
   const updateCard = useMutation(api.cards.updateCard);
@@ -116,6 +117,7 @@ export default function KanbanBoard() {
     columnId: "",
   });
   const [seeded, setSeeded] = useState(false);
+  const [claimed, setClaimed] = useState(false);
   const [focusedCardId, setFocusedCardId] = useState<Id<"cards"> | null>(null);
   const [editingCardId, setEditingCardId] = useState<Id<"cards"> | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Id<"cards"> | null>(null);
@@ -217,11 +219,18 @@ export default function KanbanBoard() {
   }, []);
 
   useEffect(() => {
+    if (!claimed) {
+      void claimExistingData().finally(() => setClaimed(true));
+    }
+  }, [claimExistingData, claimed]);
+
+  useEffect(() => {
+    if (!claimed) return;
     if (!seeded && columns.length === 0) {
       void ensureDefaults();
       setSeeded(true);
     }
-  }, [columns.length, ensureDefaults, seeded]);
+  }, [claimed, columns.length, ensureDefaults, seeded]);
 
 
 

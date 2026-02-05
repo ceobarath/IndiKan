@@ -2,13 +2,19 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const getCards = query({
   args: {
     includeArchived: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const cards = await ctx.db.query("cards").collect();
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const cards = await ctx.db
+      .query("cards")
+      .withIndex("by_user_column_order", (q) => q.eq("userId", userId))
+      .collect();
     if (args.includeArchived) {
       return cards;
     }
@@ -26,9 +32,19 @@ export const createCard = mutation({
     tags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const column = await ctx.db.get(args.columnId);
+    if (!column || column.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
     const last = await ctx.db
       .query("cards")
-      .withIndex("by_column_order", (q) => q.eq("columnId", args.columnId))
+      .withIndex("by_user_column_order", (q) =>
+        q.eq("userId", userId).eq("columnId", args.columnId)
+      )
       .order("desc")
       .first();
 
@@ -47,6 +63,7 @@ export const createCard = mutation({
       archived: false,
       overflowed: false,
       timeSeconds: 0,
+      userId,
     });
   },
 });
@@ -63,6 +80,14 @@ export const updateCard = mutation({
     tags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const card = await ctx.db.get(args.id);
+    if (!card || card.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
     const { id, title, description, priority, dueDate, tags } = args;
     const updates: {
       title?: string;
@@ -92,6 +117,14 @@ export const setOverflow = mutation({
     overflowed: v.boolean(),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const card = await ctx.db.get(args.id);
+    if (!card || card.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
     await ctx.db.patch(args.id, {
       overflowed: args.overflowed,
       updatedAt: Date.now(),
@@ -110,12 +143,24 @@ export const reorderCards = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
     for (const update of args.updates) {
+      const card = await ctx.db.get(update.id);
+      if (!card || card.userId !== userId) {
+        throw new Error("Unauthorized");
+      }
       const patch: { order: number; columnId?: Id<"columns"> } = {
         order: update.order,
       };
 
       if (update.columnId) {
+        const column = await ctx.db.get(update.columnId as Id<"columns">);
+        if (!column || column.userId !== userId) {
+          throw new Error("Unauthorized");
+        }
         patch.columnId = update.columnId as Id<"columns">;
       }
 
@@ -130,6 +175,14 @@ export const toggleArchive = mutation({
     archived: v.boolean(),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const card = await ctx.db.get(args.id);
+    if (!card || card.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
     await ctx.db.patch(args.id, {
       archived: args.archived,
       updatedAt: Date.now(),
@@ -142,8 +195,12 @@ export const toggleTimer = mutation({
     id: v.id("cards"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
     const card = await ctx.db.get(args.id);
-    if (!card) return;
+    if (!card || card.userId !== userId) return;
 
     if (card.timerStartedAt) {
       const elapsed = Math.max(0, Date.now() - card.timerStartedAt);
@@ -160,13 +217,19 @@ export const toggleTimer = mutation({
       return;
     }
 
-    const columns = await ctx.db.query("columns").withIndex("by_order").collect();
+    const columns = await ctx.db
+      .query("columns")
+      .withIndex("by_user_order", (q) => q.eq("userId", userId))
+      .collect();
     const focusColumnId = columns[1]?._id;
     if (!focusColumnId || card.columnId !== focusColumnId) {
       return;
     }
 
-    const running = await ctx.db.query("cards").collect();
+    const running = await ctx.db
+      .query("cards")
+      .withIndex("by_user_column_order", (q) => q.eq("userId", userId))
+      .collect();
     for (const existing of running) {
       if (existing.timerStartedAt) {
         const elapsed = Math.max(0, Date.now() - existing.timerStartedAt);
@@ -189,6 +252,14 @@ export const toggleTimer = mutation({
 export const deleteCard = mutation({
   args: { id: v.id("cards") },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+    const card = await ctx.db.get(args.id);
+    if (!card || card.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
     await ctx.db.delete(args.id);
   },
 });
