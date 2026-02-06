@@ -1,7 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 
 const defaultColumns = [
   { title: "Todo", order: 1000 },
@@ -40,11 +39,9 @@ const starterCards = [
 export const getColumns = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
     return ctx.db
       .query("columns")
-      .withIndex("by_user_order", (q) => q.eq("userId", userId))
+      .withIndex("by_order", (q) => q)
       .collect();
   },
 });
@@ -52,21 +49,14 @@ export const getColumns = query({
 export const ensureDefaults = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
-    const existing = await ctx.db
-      .query("columns")
-      .withIndex("by_user_order", (q) => q.eq("userId", userId))
-      .first();
+    const existing = await ctx.db.query("columns").first();
     if (existing) {
       return;
     }
 
     const createdIds: Record<string, Id<"columns">> = {};
     for (const column of defaultColumns) {
-      const id = await ctx.db.insert("columns", { ...column, userId });
+      const id = await ctx.db.insert("columns", { ...column });
       createdIds[column.title] = id;
     }
 
@@ -88,7 +78,6 @@ export const ensureDefaults = mutation({
         overflowed: false,
         timeSeconds: 0,
         tags: [],
-        userId,
       });
     }
   },
@@ -97,20 +86,15 @@ export const ensureDefaults = mutation({
 export const createColumn = mutation({
   args: { title: v.string() },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
-    const last = await ctx.db
-      .query("columns")
-      .withIndex("by_user_order", (q) => q.eq("userId", userId))
-      .order("desc")
-      .first();
-    const nextOrder = last ? last.order + 1000 : 1000;
+    const columns = await ctx.db.query("columns").collect();
+    const maxOrder = columns.reduce(
+      (max, column) => (column.order > max ? column.order : max),
+      0
+    );
+    const nextOrder = maxOrder ? maxOrder + 1000 : 1000;
     return ctx.db.insert("columns", {
       title: args.title,
       order: nextOrder,
-      userId,
     });
   },
 });
@@ -118,14 +102,8 @@ export const createColumn = mutation({
 export const updateColumn = mutation({
   args: { id: v.id("columns"), title: v.string() },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
     const column = await ctx.db.get(args.id);
-    if (!column || column.userId !== userId) {
-      throw new Error("Unauthorized");
-    }
+    if (!column) return;
     await ctx.db.patch(args.id, { title: args.title });
   },
 });
@@ -133,13 +111,9 @@ export const updateColumn = mutation({
 export const normalizeDefaultColumnNames = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
     const columns = await ctx.db
       .query("columns")
-      .withIndex("by_user_order", (q) => q.eq("userId", userId))
+      .withIndex("by_order", (q) => q)
       .collect();
     if (columns.length === 0) return;
 
@@ -169,13 +143,9 @@ export const normalizeDefaultColumnNames = mutation({
 export const forceDefaultColumnTitles = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
     const columns = await ctx.db
       .query("columns")
-      .withIndex("by_user_order", (q) => q.eq("userId", userId))
+      .withIndex("by_order", (q) => q)
       .collect();
     if (columns.length === 0) return;
 
@@ -193,24 +163,5 @@ export const forceDefaultColumnTitles = mutation({
 
 export const claimExistingData = mutation({
   args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Unauthorized");
-    }
-
-    const columns = await ctx.db.query("columns").collect();
-    for (const column of columns) {
-      if (!column.userId) {
-        await ctx.db.patch(column._id, { userId });
-      }
-    }
-
-    const cards = await ctx.db.query("cards").collect();
-    for (const card of cards) {
-      if (!card.userId) {
-        await ctx.db.patch(card._id, { userId });
-      }
-    }
-  },
+  handler: async () => undefined,
 });

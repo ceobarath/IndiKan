@@ -1,16 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
-import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  ...authTables,
   columns: defineTable({
     title: v.string(),
     order: v.number(),
-    userId: v.optional(v.id("users")),
   })
-    .index("by_order", ["order"])
-    .index("by_user_order", ["userId", "order"]),
+    .index("by_order", ["order"]),
   cards: defineTable({
     title: v.string(),
     description: v.optional(v.string()),
@@ -25,8 +21,6 @@ export default defineSchema({
     timeSeconds: v.number(),
     timerStartedAt: v.optional(v.number()),
     tags: v.optional(v.array(v.string())),
-    userId: v.optional(v.id("users")),
   })
-    .index("by_column_order", ["columnId", "order"])
-    .index("by_user_column_order", ["userId", "columnId", "order"]),
+    .index("by_column_order", ["columnId", "order"]),
 });
