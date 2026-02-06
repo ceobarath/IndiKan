@@ -65,6 +65,8 @@ bunx convex dev
 2. Deploy Next.js to your host of choice (Vercel, Netlify, Render, etc.).
 3. Add the environment variable in your hosting provider.
 
+Please note this project used Codex & Cursor hehe
+
 ## Contributing
 PRs are welcome. If you’re planning a bigger change, open an issue first so we can align on direction.
 
