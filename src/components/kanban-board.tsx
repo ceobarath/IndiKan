@@ -41,9 +41,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
 
 const priorities = [
   { value: "low", label: "Low" },
@@ -54,10 +51,10 @@ const priorities = [
 type Priority = (typeof priorities)[number]["value"];
 
 type CardRecord = {
-  _id: Id<"cards">;
+  _id: string;
   title: string;
   description?: string;
-  columnId: Id<"columns">;
+  columnId: string;
   order: number;
   priority: Priority;
   dueDate?: string;
@@ -70,10 +67,57 @@ type CardRecord = {
 };
 
 type ColumnRecord = {
-  _id: Id<"columns">;
+  _id: string;
   title: string;
   order: number;
 };
+
+const STORAGE_COLUMNS_KEY = "indikan.columns";
+const STORAGE_CARDS_KEY = "indikan.cards";
+
+const defaultColumns: ColumnRecord[] = [
+  { _id: "col-todo", title: "Todo", order: 1000 },
+  { _id: "col-in-progress", title: "In Progress", order: 2000 },
+  { _id: "col-blocked-review", title: "Blocked/Review", order: 3000 },
+  { _id: "col-done", title: "Done", order: 4000 },
+];
+
+const starterCards: Array<{
+  title: string;
+  description: string;
+  columnTitle: string;
+  priority: Priority;
+}> = [
+  {
+    title: "Define product promise",
+    description: "One sentence that makes it easy to say no to everything else.",
+    columnTitle: "Todo",
+    priority: "medium",
+  },
+  {
+    title: "Design the first-run onboarding",
+    description: "Sketch the first 3 screens or steps.",
+    columnTitle: "In Progress",
+    priority: "high",
+  },
+  {
+    title: "Set up feedback capture",
+    description: "Decide where early users can leave notes.",
+    columnTitle: "Blocked/Review",
+    priority: "low",
+  },
+  {
+    title: "Ship v0.1 to one user",
+    description: "Pick a single person and get it into their hands.",
+    columnTitle: "Done",
+    priority: "medium",
+  },
+];
+
+const createId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 
 export default function KanbanBoard() {
@@ -86,25 +130,9 @@ export default function KanbanBoard() {
     from: "",
     to: "",
   });
-
-  const columns = (useQuery(api.columns.getColumns) ?? []) as ColumnRecord[];
-  const cards = ((useQuery(api.cards.getCards, {
-    includeArchived: true,
-  }) ?? []) as CardRecord[]).map((card) => ({
-    ...card,
-    overflowed: card.overflowed ?? false,
-  }));
-
-  const ensureDefaults = useMutation(api.columns.ensureDefaults);
-  const claimExistingData = useMutation(api.columns.claimExistingData);
-  const updateColumn = useMutation(api.columns.updateColumn);
-  const createCard = useMutation(api.cards.createCard);
-  const updateCard = useMutation(api.cards.updateCard);
-  const toggleArchive = useMutation(api.cards.toggleArchive);
-  const toggleTimer = useMutation(api.cards.toggleTimer);
-  const setOverflow = useMutation(api.cards.setOverflow);
-  const reorderCards = useMutation(api.cards.reorderCards);
-  const deleteCard = useMutation(api.cards.deleteCard);
+  const [columns, setColumns] = useState<ColumnRecord[]>([]);
+  const [cards, setCards] = useState<CardRecord[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const [quickForm, setQuickForm] = useState({
     title: "",
@@ -114,11 +142,9 @@ export default function KanbanBoard() {
     dueDate: "",
     columnId: "",
   });
-  const [seeded, setSeeded] = useState(false);
-  const [claimed, setClaimed] = useState(false);
-  const [focusedCardId, setFocusedCardId] = useState<Id<"cards"> | null>(null);
-  const [editingCardId, setEditingCardId] = useState<Id<"cards"> | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<Id<"cards"> | null>(null);
+  const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [showQuickModal, setShowQuickModal] = useState(false);
   const [hiddenColumnIds, setHiddenColumnIds] = useState<Set<string>>(
     () => new Set()
@@ -129,15 +155,15 @@ export default function KanbanBoard() {
   const [showLimitModal, setShowLimitModal] = useState(false);
   const [showPanels, setShowPanels] = useState(true);
   const [showTimerModal, setShowTimerModal] = useState(false);
-  const [timerModalId, setTimerModalId] = useState<Id<"cards"> | null>(null);
+  const [timerModalId, setTimerModalId] = useState<string | null>(null);
   const [activeSelectionColumnId, setActiveSelectionColumnId] = useState<
-    Id<"columns"> | null
+    string | null
   >(null);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(
     () => new Set()
   );
   const [deleteTarget, setDeleteTarget] = useState<{
-    ids: Id<"cards">[];
+    ids: string[];
     label: string;
   } | null>(null);
   const [editDraft, setEditDraft] = useState({
@@ -217,18 +243,61 @@ export default function KanbanBoard() {
   }, []);
 
   useEffect(() => {
-    if (!claimed) {
-      void claimExistingData().finally(() => setClaimed(true));
+    const savedColumnsRaw = window.localStorage.getItem(STORAGE_COLUMNS_KEY);
+    const savedCardsRaw = window.localStorage.getItem(STORAGE_CARDS_KEY);
+
+    if (savedColumnsRaw && savedCardsRaw) {
+      try {
+        const savedColumns = JSON.parse(savedColumnsRaw) as ColumnRecord[];
+        const savedCards = JSON.parse(savedCardsRaw) as CardRecord[];
+        if (Array.isArray(savedColumns) && Array.isArray(savedCards)) {
+          setColumns(savedColumns);
+          setCards(
+            savedCards.map((card) => ({
+              ...card,
+              overflowed: card.overflowed ?? false,
+            }))
+          );
+          setIsHydrated(true);
+          return;
+        }
+      } catch {
+        // Ignore invalid local data and seed defaults.
+      }
     }
-  }, [claimExistingData, claimed]);
+
+    const now = Date.now();
+    const seededCards: CardRecord[] = starterCards.map((starter, index) => {
+      const targetColumn = defaultColumns.find(
+        (column) => column.title === starter.columnTitle
+      );
+      return {
+        _id: createId(),
+        title: starter.title,
+        description: starter.description,
+        columnId: targetColumn?._id ?? defaultColumns[0]._id,
+        order: (index + 1) * 1000,
+        priority: starter.priority,
+        dueDate: undefined,
+        archived: false,
+        overflowed: false,
+        updatedAt: now,
+        timeSeconds: 0,
+        timerStartedAt: undefined,
+        tags: [],
+      };
+    });
+
+    setColumns(defaultColumns);
+    setCards(seededCards);
+    setIsHydrated(true);
+  }, []);
 
   useEffect(() => {
-    if (!claimed) return;
-    if (!seeded && columns.length === 0) {
-      void ensureDefaults();
-      setSeeded(true);
-    }
-  }, [claimed, columns.length, ensureDefaults, seeded]);
+    if (!isHydrated) return;
+    window.localStorage.setItem(STORAGE_COLUMNS_KEY, JSON.stringify(columns));
+    window.localStorage.setItem(STORAGE_CARDS_KEY, JSON.stringify(cards));
+  }, [cards, columns, isHydrated]);
 
 
 
@@ -255,6 +324,151 @@ export default function KanbanBoard() {
   const celebrateColumnId = useMemo(() => {
     return baseColumns[3]?._id ?? null;
   }, [baseColumns]);
+
+  const updateColumn = async ({ id, title }: { id: string; title: string }) => {
+    setColumns((prev) =>
+      prev.map((column) =>
+        column._id === id ? { ...column, title } : column
+      )
+    );
+  };
+
+  const createCard = async (args: {
+    title: string;
+    description?: string;
+    columnId: string;
+    priority: Priority;
+    dueDate?: string;
+    tags?: string[];
+  }) => {
+    const now = Date.now();
+    setCards((prev) => {
+      const nextOrder =
+        prev
+          .filter((card) => card.columnId === args.columnId)
+          .reduce((max, card) => Math.max(max, card.order), 0) + 1000;
+      return [
+        ...prev,
+        {
+          _id: createId(),
+          title: args.title,
+          description: args.description,
+          columnId: args.columnId,
+          order: nextOrder,
+          priority: args.priority,
+          dueDate: args.dueDate,
+          archived: false,
+          overflowed: false,
+          updatedAt: now,
+          timeSeconds: 0,
+          tags: args.tags ?? [],
+        },
+      ];
+    });
+  };
+
+  const updateCard = async (args: {
+    id: string;
+    title?: string;
+    description?: string;
+    priority?: Priority;
+    dueDate?: string;
+    tags?: string[];
+  }) => {
+    setCards((prev) =>
+      prev.map((card) =>
+        card._id === args.id
+          ? {
+              ...card,
+              title: args.title ?? card.title,
+              description: args.description ?? card.description,
+              priority: args.priority ?? card.priority,
+              dueDate: args.dueDate ?? card.dueDate,
+              tags: args.tags ?? card.tags,
+              updatedAt: Date.now(),
+            }
+          : card
+      )
+    );
+  };
+
+  const toggleArchive = async ({ id, archived }: { id: string; archived: boolean }) => {
+    setCards((prev) =>
+      prev.map((card) =>
+        card._id === id ? { ...card, archived, updatedAt: Date.now() } : card
+      )
+    );
+  };
+
+  const toggleTimer = async ({ id }: { id: string }) => {
+    setCards((prev) => {
+      const target = prev.find((card) => card._id === id);
+      if (!target) return prev;
+
+      if (target.timerStartedAt) {
+        const elapsed = Math.max(0, Date.now() - target.timerStartedAt);
+        const additionalSeconds = Math.floor(elapsed / 1000);
+        return prev.map((card) =>
+          card._id === id
+            ? {
+                ...card,
+                timerStartedAt: undefined,
+                timeSeconds: card.timeSeconds + additionalSeconds,
+                updatedAt: Date.now(),
+              }
+            : card
+        );
+      }
+
+      if (target.overflowed) return prev;
+      if (!focusColumnId || target.columnId !== focusColumnId) return prev;
+
+      const now = Date.now();
+      return prev.map((card) => {
+        if (card._id === id) {
+          return { ...card, timerStartedAt: now, updatedAt: now };
+        }
+        if (!card.timerStartedAt) return card;
+        const elapsed = Math.max(0, now - card.timerStartedAt);
+        return {
+          ...card,
+          timerStartedAt: undefined,
+          timeSeconds: card.timeSeconds + Math.floor(elapsed / 1000),
+          updatedAt: now,
+        };
+      });
+    });
+  };
+
+  const setOverflow = async ({ id, overflowed }: { id: string; overflowed: boolean }) => {
+    setCards((prev) =>
+      prev.map((card) =>
+        card._id === id ? { ...card, overflowed, updatedAt: Date.now() } : card
+      )
+    );
+  };
+
+  const reorderCards = async (args: {
+    updates: Array<{ id: string; order: number; columnId?: string }>;
+  }) => {
+    const updates = new Map(args.updates.map((update) => [update.id, update]));
+    setCards((prev) =>
+      prev.map((card) => {
+        const update = updates.get(card._id);
+        if (!update) return card;
+        return {
+          ...card,
+          order: update.order,
+          columnId: update.columnId ?? card.columnId,
+          updatedAt: Date.now(),
+        };
+      })
+    );
+  };
+
+  const deleteCard = async ({ id }: { id: string }) => {
+    setCards((prev) => prev.filter((card) => card._id !== id));
+  };
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -431,8 +645,8 @@ export default function KanbanBoard() {
   }, []);
 
   const moveCardToColumn = async (
-    cardId: Id<"cards">,
-    targetColumnId: Id<"columns">
+    cardId: string,
+    targetColumnId: string
   ) => {
     const activeCard = cards.find((card) => card._id === cardId);
     if (!activeCard) return;
@@ -519,9 +733,9 @@ export default function KanbanBoard() {
       const draft = drafts.find((item) => item.id === draftId);
       if (!draft) return;
 
-      let targetColumnId: Id<"columns"> | null = null;
+      let targetColumnId: string | null = null;
       if (overId.startsWith("column:")) {
-        targetColumnId = overId.replace("column:", "") as Id<"columns">;
+        targetColumnId = overId.replace("column:", "") as string;
       } else {
         const overCard = cards.find((card) => card._id === overId);
         if (overCard) {
@@ -594,7 +808,7 @@ export default function KanbanBoard() {
     let targetIndex = 0;
 
     if (overId.startsWith("column:")) {
-      targetColumnId = overId.replace("column:", "") as Id<"columns">;
+      targetColumnId = overId.replace("column:", "") as string;
       targetIndex = (cardsByColumn[targetColumnId] ?? []).length;
     } else {
       const overCard = cards.find((card) => card._id === overId);
@@ -725,7 +939,7 @@ export default function KanbanBoard() {
       await createCard({
         title: quickForm.title.trim(),
         description: quickForm.description.trim() || undefined,
-        columnId: targetColumnId as Id<"columns">,
+        columnId: targetColumnId as string,
         priority: quickForm.priority,
         dueDate: quickForm.dueDate || undefined,
         tags,
@@ -784,7 +998,7 @@ export default function KanbanBoard() {
     });
   }, [editingCard?.updatedAt, editingCardId]);
 
-  const handleEditToggle = (id: Id<"cards"> | null) => {
+  const handleEditToggle = (id: string | null) => {
     if (!id) {
       if (editingCard?.timerStartedAt) {
         void playTacticalSound("cancel");
@@ -815,7 +1029,7 @@ export default function KanbanBoard() {
     return baseColumns[2]?._id ?? null;
   }, [baseColumns]);
 
-  const handleTimerToggle = async ({ id }: { id: Id<"cards"> }) => {
+  const handleTimerToggle = async ({ id }: { id: string }) => {
     const card = cards.find((item) => item._id === id);
     if (card?.timerStartedAt) {
       setTimerModalId(id);
@@ -843,7 +1057,7 @@ export default function KanbanBoard() {
     id,
     archived,
   }: {
-    id: Id<"cards">;
+    id: string;
     archived: boolean;
   }) => {
     if (!archived) {
@@ -859,7 +1073,7 @@ export default function KanbanBoard() {
     setArchiveTarget(null);
   };
 
-  const openDeleteConfirm = (ids: Id<"cards">[], label: string) => {
+  const openDeleteConfirm = (ids: string[], label: string) => {
     setDeleteTarget({ ids, label });
   };
 
@@ -1097,7 +1311,7 @@ export default function KanbanBoard() {
               );
             }}
             onSendDraft={async (draft) => {
-              const targetId = draft.columnId as Id<"columns"> | null;
+              const targetId = draft.columnId as string | null;
               if (!targetId) return;
               if (
                 focusColumnId &&
@@ -1780,25 +1994,25 @@ function KanbanColumn({
 }: {
   column: ColumnRecord;
   cards: CardRecord[];
-  focusedCardId: Id<"cards"> | null;
-  editingCardId: Id<"cards"> | null;
-  activeSelectionColumnId: Id<"columns"> | null;
+  focusedCardId: string | null;
+  editingCardId: string | null;
+  activeSelectionColumnId: string | null;
   selectedCardIds: Set<string>;
-  onStartSelection: (columnId: Id<"columns">) => void;
-  onClearSelection: (columnId: Id<"columns">) => void;
+  onStartSelection: (columnId: string) => void;
+  onClearSelection: (columnId: string) => void;
   onSelectAllInColumn: (
-    columnId: Id<"columns">,
+    columnId: string,
     mode: "select" | "clear"
   ) => void;
-  onToggleCardSelection: (cardId: Id<"cards">) => void;
-  onDeleteSelected: (columnId: Id<"columns">, ids: Id<"cards">[]) => void;
-  onFocusCard: (id: Id<"cards"> | null) => void;
-  onEditCard: (id: Id<"cards"> | null) => void;
+  onToggleCardSelection: (cardId: string) => void;
+  onDeleteSelected: (columnId: string, ids: string[]) => void;
+  onFocusCard: (id: string | null) => void;
+  onEditCard: (id: string | null) => void;
   nowTick: number;
-  onArchive: (args: { id: Id<"cards">; archived: boolean }) => Promise<void>;
-  onRename: (args: { id: Id<"columns">; title: string }) => Promise<void>;
-  onToggleTimer: (args: { id: Id<"cards"> }) => Promise<void>;
-  focusColumnId: Id<"columns"> | null;
+  onArchive: (args: { id: string; archived: boolean }) => Promise<void>;
+  onRename: (args: { id: string; title: string }) => Promise<void>;
+  onToggleTimer: (args: { id: string }) => Promise<void>;
+  focusColumnId: string | null;
   onSound: (variant?: "tap" | "confirm" | "cancel" | "drag") => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -2016,13 +2230,13 @@ function KanbanCard({
   isEditing: boolean;
   selectionEnabled: boolean;
   isSelected: boolean;
-  onSelect: (id: Id<"cards">) => void;
-  onFocus: (id: Id<"cards">) => void;
-  onEdit: (id: Id<"cards"> | null) => void;
+  onSelect: (id: string) => void;
+  onFocus: (id: string) => void;
+  onEdit: (id: string | null) => void;
   nowTick: number;
-  onArchive: (args: { id: Id<"cards">; archived: boolean }) => Promise<void>;
-  onToggleTimer: (args: { id: Id<"cards"> }) => Promise<void>;
-  focusColumnId: Id<"columns"> | null;
+  onArchive: (args: { id: string; archived: boolean }) => Promise<void>;
+  onToggleTimer: (args: { id: string }) => Promise<void>;
+  focusColumnId: string | null;
   onSound: (variant?: "tap" | "confirm" | "cancel" | "drag") => void;
 }) {
   const {
@@ -2300,7 +2514,7 @@ function OverflowPanel({
   }>;
   cards: CardRecord[];
   columns: ColumnRecord[];
-  focusColumnId: Id<"columns"> | null;
+  focusColumnId: string | null;
   inProgressCount: number;
   isOpen: boolean;
   onToggle: () => void;
