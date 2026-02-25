@@ -51,8 +51,6 @@ const priorities = [
   { value: "high", label: "High" },
 ] as const;
 
-const MAX_VISIBLE_COLUMNS = 4;
-
 type Priority = (typeof priorities)[number]["value"];
 
 type CardRecord = {
@@ -239,7 +237,7 @@ export default function KanbanBoard() {
   }, [columns]);
 
   const baseColumns = useMemo(() => {
-    return orderedColumns.slice(0, MAX_VISIBLE_COLUMNS);
+    return orderedColumns;
   }, [orderedColumns]);
 
   const firstColumnId = useMemo(() => {
