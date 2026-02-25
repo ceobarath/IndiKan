@@ -242,6 +242,10 @@ export default function KanbanBoard() {
     return orderedColumns.slice(0, MAX_VISIBLE_COLUMNS);
   }, [orderedColumns]);
 
+  const firstColumnId = useMemo(() => {
+    return baseColumns[0]?._id ?? null;
+  }, [baseColumns]);
+
   const sortedColumns = useMemo(() => {
     return baseColumns.filter((column) => !hiddenColumnIds.has(column._id));
   }, [baseColumns, hiddenColumnIds]);
@@ -293,7 +297,7 @@ export default function KanbanBoard() {
 
       if (event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setQuickForm((prev) => ({ ...prev, columnId: "" }));
+        setQuickForm((prev) => ({ ...prev, columnId: firstColumnId ?? "" }));
         setShowQuickModal(true);
         setTimeout(() => quickTitleRef.current?.focus(), 0);
         return;
@@ -332,6 +336,7 @@ export default function KanbanBoard() {
     editingCardId,
     cards,
     playTacticalSound,
+    firstColumnId,
   ]);
 
   const sensors = useSensors(
@@ -698,7 +703,7 @@ export default function KanbanBoard() {
   ) => {
     event.preventDefault();
     if (!quickForm.title.trim()) {
-      return;
+      return false;
     }
 
     void playTacticalSound("confirm");
@@ -707,20 +712,22 @@ export default function KanbanBoard() {
       .map((tag) => tag.trim())
       .filter(Boolean);
 
-    if (quickForm.columnId) {
+    const targetColumnId = quickForm.columnId || firstColumnId || "";
+
+    if (targetColumnId) {
       if (
         focusColumnId &&
-        quickForm.columnId === focusColumnId &&
+        targetColumnId === focusColumnId &&
         inProgressCount >= 5
       ) {
         showInProgressLimitNotice();
         void playTacticalSound("cancel");
-        return;
+        return false;
       }
       await createCard({
         title: quickForm.title.trim(),
         description: quickForm.description.trim() || undefined,
-        columnId: quickForm.columnId as Id<"columns">,
+        columnId: targetColumnId as Id<"columns">,
         priority: quickForm.priority,
         dueDate: quickForm.dueDate || undefined,
         tags,
@@ -749,6 +756,7 @@ export default function KanbanBoard() {
       dueDate: "",
       columnId: "",
     }));
+    return true;
   };
 
 
@@ -761,10 +769,6 @@ export default function KanbanBoard() {
         card.columnId === focusColumnId
     ).length;
   }, [cards, focusColumnId]);
-
-  const firstColumnId = useMemo(() => {
-    return baseColumns[0]?._id ?? null;
-  }, [baseColumns]);
 
   const editingCard = useMemo(() => {
     if (!editingCardId) return null;
@@ -901,7 +905,7 @@ export default function KanbanBoard() {
               type="button"
               onClick={() => {
                 void playTacticalSound("tap");
-                setQuickForm((prev) => ({ ...prev, columnId: "" }));
+                setQuickForm((prev) => ({ ...prev, columnId: firstColumnId ?? "" }));
                 setShowQuickModal(true);
                 setTimeout(() => quickTitleRef.current?.focus(), 0);
               }}
@@ -1245,7 +1249,12 @@ export default function KanbanBoard() {
           </p>
           <button
             type="button"
-            onClick={() => quickTitleRef.current?.focus()}
+            onClick={() => {
+              void playTacticalSound("tap");
+              setQuickForm((prev) => ({ ...prev, columnId: firstColumnId ?? "" }));
+              setShowQuickModal(true);
+              setTimeout(() => quickTitleRef.current?.focus(), 0);
+            }}
             className="mt-4 rounded-full bg-[color:var(--accent)] px-5 py-2 text-xs font-semibold tracking-[0.08em] text-[color:var(--bg)]"
           >
             Add a task
@@ -1636,9 +1645,11 @@ export default function KanbanBoard() {
               </button>
             </div>
             <form
-              onSubmit={(event) => {
-                void handleQuickCreate(event);
-                setShowQuickModal(false);
+              onSubmit={async (event) => {
+                const didSave = await handleQuickCreate(event);
+                if (didSave) {
+                  setShowQuickModal(false);
+                }
               }}
               className="mt-6 grid gap-4"
             >
