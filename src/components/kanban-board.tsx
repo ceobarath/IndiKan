@@ -1134,79 +1134,89 @@ export default function KanbanBoard() {
           />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[repeat(4,minmax(0,1fr))]">
-          {sortedColumns.map((column) => (
-            <KanbanColumn
-              key={column._id}
-              column={column}
-              cards={cardsByColumn[column._id] ?? []}
-              focusedCardId={focusedCardId}
-              editingCardId={editingCardId}
-              activeSelectionColumnId={activeSelectionColumnId}
-              selectedCardIds={selectedCardIds}
-              onStartSelection={(columnId) => {
-                void playTacticalSound("tap");
-                setActiveSelectionColumnId(columnId);
-                setSelectedCardIds(new Set());
-              }}
-              onClearSelection={(columnId) => {
-                void playTacticalSound("cancel");
-                setActiveSelectionColumnId((prev) =>
-                  prev === columnId ? null : prev
-                );
-                setSelectedCardIds((prev) => {
-                  const next = new Set(prev);
-                  (cardsByColumn[columnId] ?? []).forEach((card) =>
-                    next.delete(card._id)
+        <div className="overflow-x-auto pb-2">
+          <div
+            className="grid min-w-full gap-4"
+            style={{
+              gridTemplateColumns: `repeat(${Math.max(
+                sortedColumns.length,
+                1
+              )}, minmax(280px, 1fr))`,
+            }}
+          >
+            {sortedColumns.map((column) => (
+              <KanbanColumn
+                key={column._id}
+                column={column}
+                cards={cardsByColumn[column._id] ?? []}
+                focusedCardId={focusedCardId}
+                editingCardId={editingCardId}
+                activeSelectionColumnId={activeSelectionColumnId}
+                selectedCardIds={selectedCardIds}
+                onStartSelection={(columnId) => {
+                  void playTacticalSound("tap");
+                  setActiveSelectionColumnId(columnId);
+                  setSelectedCardIds(new Set());
+                }}
+                onClearSelection={(columnId) => {
+                  void playTacticalSound("cancel");
+                  setActiveSelectionColumnId((prev) =>
+                    prev === columnId ? null : prev
                   );
-                  return next;
-                });
-              }}
-              onSelectAllInColumn={(columnId, mode) => {
-                void playTacticalSound("tap");
-                setSelectedCardIds((prev) => {
-                  const next = new Set(prev);
-                  const columnCards = cardsByColumn[columnId] ?? [];
-                  if (mode === "clear") {
-                    columnCards.forEach((card) => next.delete(card._id));
-                  } else {
-                    columnCards.forEach((card) => next.add(card._id));
-                  }
-                  return next;
-                });
-              }}
-              onToggleCardSelection={(cardId) => {
-                void playTacticalSound("tap");
-                setSelectedCardIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(cardId)) {
-                    next.delete(cardId);
-                  } else {
-                    next.add(cardId);
-                  }
-                  return next;
-                });
-              }}
-              onDeleteSelected={(columnId, ids) => {
-                openDeleteConfirm(
-                  ids,
-                  `Delete ${ids.length} task${
-                    ids.length === 1 ? "" : "s"
-                  } from ${column.title}?`
-                );
-              }}
-              onFocusCard={setFocusedCardId}
-              onEditCard={handleEditToggle}
-              nowTick={nowTick}
-              onArchive={handleArchiveRequest}
-              onRename={async (args) => {
-                await updateColumn(args);
-              }}
-              onToggleTimer={handleTimerToggle}
-              focusColumnId={focusColumnId}
-              onSound={playTacticalSound}
-            />
-          ))}
+                  setSelectedCardIds((prev) => {
+                    const next = new Set(prev);
+                    (cardsByColumn[columnId] ?? []).forEach((card) =>
+                      next.delete(card._id)
+                    );
+                    return next;
+                  });
+                }}
+                onSelectAllInColumn={(columnId, mode) => {
+                  void playTacticalSound("tap");
+                  setSelectedCardIds((prev) => {
+                    const next = new Set(prev);
+                    const columnCards = cardsByColumn[columnId] ?? [];
+                    if (mode === "clear") {
+                      columnCards.forEach((card) => next.delete(card._id));
+                    } else {
+                      columnCards.forEach((card) => next.add(card._id));
+                    }
+                    return next;
+                  });
+                }}
+                onToggleCardSelection={(cardId) => {
+                  void playTacticalSound("tap");
+                  setSelectedCardIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(cardId)) {
+                      next.delete(cardId);
+                    } else {
+                      next.add(cardId);
+                    }
+                    return next;
+                  });
+                }}
+                onDeleteSelected={(columnId, ids) => {
+                  openDeleteConfirm(
+                    ids,
+                    `Delete ${ids.length} task${
+                      ids.length === 1 ? "" : "s"
+                    } from ${column.title}?`
+                  );
+                }}
+                onFocusCard={setFocusedCardId}
+                onEditCard={handleEditToggle}
+                nowTick={nowTick}
+                onArchive={handleArchiveRequest}
+                onRename={async (args) => {
+                  await updateColumn(args);
+                }}
+                onToggleTimer={handleTimerToggle}
+                focusColumnId={focusColumnId}
+                onSound={playTacticalSound}
+              />
+            ))}
+          </div>
         </div>
         <DragOverlay dropAnimation={dropAnimation}>
           {activeDragId ? (
