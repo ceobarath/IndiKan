@@ -72,9 +72,6 @@ type ColumnRecord = {
   order: number;
 };
 
-const STORAGE_COLUMNS_KEY = "indikan.columns";
-const STORAGE_CARDS_KEY = "indikan.cards";
-
 const defaultColumns: ColumnRecord[] = [
   { _id: "col-todo", title: "Todo", order: 1000 },
   { _id: "col-in-progress", title: "In Progress", order: 2000 },
@@ -118,6 +115,35 @@ const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+const seedDefaultBoard = () => {
+  const now = Date.now();
+  const seededCards: CardRecord[] = starterCards.map((starter, index) => {
+    const targetColumn = defaultColumns.find(
+      (column) => column.title === starter.columnTitle
+    );
+    return {
+      _id: createId(),
+      title: starter.title,
+      description: starter.description,
+      columnId: targetColumn?._id ?? defaultColumns[0]._id,
+      order: (index + 1) * 1000,
+      priority: starter.priority,
+      dueDate: undefined,
+      archived: false,
+      overflowed: false,
+      updatedAt: now,
+      timeSeconds: 0,
+      timerStartedAt: undefined,
+      tags: [],
+    };
+  });
+
+  return {
+    columns: defaultColumns,
+    cards: seededCards,
+  };
+};
 
 
 export default function KanbanBoard() {
@@ -243,17 +269,21 @@ export default function KanbanBoard() {
   }, []);
 
   useEffect(() => {
-    const savedColumnsRaw = window.localStorage.getItem(STORAGE_COLUMNS_KEY);
-    const savedCardsRaw = window.localStorage.getItem(STORAGE_CARDS_KEY);
-
-    if (savedColumnsRaw && savedCardsRaw) {
+    let cancelled = false;
+    const loadBoard = async () => {
       try {
-        const savedColumns = JSON.parse(savedColumnsRaw) as ColumnRecord[];
-        const savedCards = JSON.parse(savedCardsRaw) as CardRecord[];
-        if (Array.isArray(savedColumns) && Array.isArray(savedCards)) {
-          setColumns(savedColumns);
+        const response = await fetch("/api/board", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Failed to load board (${response.status})`);
+        }
+        const payload = (await response.json()) as {
+          columns?: ColumnRecord[];
+          cards?: CardRecord[];
+        };
+        if (!cancelled && Array.isArray(payload.columns) && Array.isArray(payload.cards)) {
+          setColumns(payload.columns);
           setCards(
-            savedCards.map((card) => ({
+            payload.cards.map((card) => ({
               ...card,
               overflowed: card.overflowed ?? false,
             }))
@@ -262,41 +292,45 @@ export default function KanbanBoard() {
           return;
         }
       } catch {
-        // Ignore invalid local data and seed defaults.
+        // Ignore API errors and seed local defaults.
       }
-    }
 
-    const now = Date.now();
-    const seededCards: CardRecord[] = starterCards.map((starter, index) => {
-      const targetColumn = defaultColumns.find(
-        (column) => column.title === starter.columnTitle
-      );
-      return {
-        _id: createId(),
-        title: starter.title,
-        description: starter.description,
-        columnId: targetColumn?._id ?? defaultColumns[0]._id,
-        order: (index + 1) * 1000,
-        priority: starter.priority,
-        dueDate: undefined,
-        archived: false,
-        overflowed: false,
-        updatedAt: now,
-        timeSeconds: 0,
-        timerStartedAt: undefined,
-        tags: [],
-      };
-    });
+      if (!cancelled) {
+        const seeded = seedDefaultBoard();
+        setColumns(seeded.columns);
+        setCards(seeded.cards);
+        setIsHydrated(true);
+      }
+    };
 
-    setColumns(defaultColumns);
-    setCards(seededCards);
-    setIsHydrated(true);
+    void loadBoard();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!isHydrated) return;
-    window.localStorage.setItem(STORAGE_COLUMNS_KEY, JSON.stringify(columns));
-    window.localStorage.setItem(STORAGE_CARDS_KEY, JSON.stringify(cards));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      void fetch("/api/board", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({ columns, cards }),
+      }).catch(() => {
+        // Ignore save failures and keep local state responsive.
+      });
+    }, 150);
+
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, [cards, columns, isHydrated]);
 
 
@@ -1104,7 +1138,7 @@ export default function KanbanBoard() {
 
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" data-testid="kanban-board">
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -2046,6 +2080,8 @@ function KanbanColumn({
   return (
     <section
       ref={setNodeRef}
+      data-testid={`column-${column._id}`}
+      data-column-id={column._id}
       className={clsx(
         "flex min-h-[320px] flex-col gap-4 rounded-3xl border border-[color:var(--stroke)] bg-[color:var(--surface-strong)] p-4 shadow-[var(--shadow)]",
         (isOver || isHoveringCardInColumn) && "ring-2 ring-[color:var(--accent)]"
@@ -2281,6 +2317,9 @@ function KanbanCard({
   return (
     <motion.article
       ref={setNodeRef}
+      data-testid={`card-${card._id}`}
+      data-card-id={card._id}
+      data-card-title={card.title}
       style={{ ...style, touchAction: "none", transformOrigin: "center" }}
       {...attributes}
       {...listeners}
